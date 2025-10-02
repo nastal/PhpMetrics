@@ -10,6 +10,7 @@ use Hal\Component\Issue\Issuer;
 use Hal\Component\Output\Output;
 use Hal\Component\Output\ProgressBar;
 use Hal\Metric\Class_\ClassEnumVisitor;
+use Hal\Metric\Class_\Custom\DetailedMethodVisitor;
 use Hal\Metric\Class_\Complexity\CyclomaticComplexityVisitor;
 use Hal\Metric\Class_\Complexity\KanDefectVisitor;
 use Hal\Metric\Class_\Component\MaintainabilityIndexVisitor;
@@ -99,7 +100,8 @@ class Analyze
                 new MaintainabilityIndexVisitor($metrics),
                 new KanDefectVisitor($metrics),
                 new SystemComplexityVisitor($metrics),
-                new PackageCollectingVisitor($metrics)
+                new PackageCollectingVisitor($metrics),
+                new DetailedMethodVisitor($metrics)
             ]
         );
 
