@@ -21,6 +21,7 @@ use Hal\Metric\Class_\StructureVisitor;
 use Hal\Metric\Class_\Text\HalsteadVisitor;
 use Hal\Metric\Class_\Text\LengthVisitor;
 use Hal\Metric\Metrics;
+use Hal\Metric\Legacy\GlobalScopeVisitor;
 use Hal\Metric\Package\PackageAbstraction;
 use Hal\Metric\Package\PackageCollectingVisitor;
 use Hal\Metric\Package\PackageDependencies;
@@ -101,7 +102,8 @@ class Analyze
                 new KanDefectVisitor($metrics),
                 new SystemComplexityVisitor($metrics),
                 new PackageCollectingVisitor($metrics),
-                new DetailedMethodVisitor($metrics)
+                new DetailedMethodVisitor($metrics),
+                new GlobalScopeVisitor($metrics)
             ]
         );
 
