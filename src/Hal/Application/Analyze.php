@@ -16,6 +16,7 @@ use Hal\Metric\Class_\Component\MaintainabilityIndexVisitor;
 use Hal\Metric\Class_\Coupling\ExternalsVisitor;
 use Hal\Metric\Class_\Structural\LcomVisitor;
 use Hal\Metric\Class_\Structural\SystemComplexityVisitor;
+use Hal\Metric\Class_\StructureVisitor;
 use Hal\Metric\Class_\Text\HalsteadVisitor;
 use Hal\Metric\Class_\Text\LengthVisitor;
 use Hal\Metric\Metrics;
@@ -88,6 +89,7 @@ class Analyze
             [
                 new NameResolver(),
                 new ClassEnumVisitor($metrics),
+                new StructureVisitor($metrics),
                 new CyclomaticComplexityVisitor($metrics),
                 new ExternalsVisitor($metrics),
                 new LcomVisitor($metrics),
@@ -109,6 +111,9 @@ class Analyze
             $progress->advance();
             $code = file_get_contents($file);
             $this->issuer->set('filename', $file);
+
+            $beforeMetrics = array_keys($metrics->all());
+
             try {
                 $stmts = $parser->parse($code);
                 $this->issuer->set('statements', $stmts);
@@ -116,6 +121,17 @@ class Analyze
             } catch (Error $e) {
                 $this->output->writeln(sprintf('<error>Cannot parse %s</error>', $file));
             }
+
+            $afterMetrics = array_keys($metrics->all());
+            $newMetrics = array_diff($afterMetrics, $beforeMetrics);
+
+            foreach($newMetrics as $metricName) {
+                $metric = $metrics->get($metricName);
+                if ($metric instanceof \Hal\Metric\ClassMetric || $metric instanceof \Hal\Metric\InterfaceMetric) {
+                    $metric->set('filepath', realpath($file));
+                }
+            }
+
             $this->issuer->clear('filename');
             $this->issuer->clear('statements');
         }
