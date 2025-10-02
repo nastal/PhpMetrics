@@ -102,14 +102,26 @@ class Analyze
                 new KanDefectVisitor($metrics),
                 new SystemComplexityVisitor($metrics),
                 new PackageCollectingVisitor($metrics),
+                //new GlobalScopeVisitor($metrics)
+            ]
+        );
+
+        // Second traverser for detailed method analysis (needs metrics to be created first)
+        $detailedTraverser = new NodeTraverser();
+        (new ParserTraverserVisitorsAssigner())->assign(
+            $detailedTraverser,
+            [
+                new NameResolver(),
                 new DetailedMethodVisitor($metrics),
-                new GlobalScopeVisitor($metrics)
             ]
         );
 
         // create a new progress bar (50 units)
         $progress = new ProgressBar($this->output, count($files));
         $progress->start();
+
+        // Store parsed statements for second pass
+        $parsedFiles = [];
 
         foreach ($files as $file) {
             $progress->advance();
@@ -122,6 +134,9 @@ class Analyze
                 $stmts = $parser->parse($code);
                 $this->issuer->set('statements', $stmts);
                 $traverser->traverse($stmts);
+
+                // Store for second pass
+                $parsedFiles[$file] = $stmts;
             } catch (Error $e) {
                 $this->output->writeln(sprintf('<error>Cannot parse %s</error>', $file));
             }
@@ -141,6 +156,22 @@ class Analyze
         }
 
         $progress->clear();
+
+        // Second pass: detailed method analysis
+        $this->output->write('Analyzing method details...');
+        $progress2 = new ProgressBar($this->output, count($parsedFiles));
+        $progress2->start();
+
+        foreach ($parsedFiles as $file => $stmts) {
+            $progress2->advance();
+            try {
+                $detailedTraverser->traverse($stmts);
+            } catch (Error $e) {
+                $this->output->writeln(sprintf('<error>Cannot analyze details for %s</error>', $file));
+            }
+        }
+
+        $progress2->clear();
 
         $this->output->write('Executing system analyzes...');
 
