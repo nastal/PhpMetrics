@@ -62,23 +62,7 @@ class StructureVisitor extends NodeVisitorAbstract
                 if ($stmt instanceof Stmt\Property) {
                     $type = 'mixed';
                     if ($stmt->type) {
-                        if ($stmt->type instanceof Node\UnionType) {
-                            $typeNames = [];
-                            foreach ($stmt->type->types as $subType) {
-                                $typeNames[] = $subType->toString();
-                            }
-                            $type = implode('|', $typeNames);
-                        } elseif ($stmt->type instanceof Node\IntersectionType) {
-                            $typeNames = [];
-                            foreach ($stmt->type->types as $subType) {
-                                $typeNames[] = $subType->toString();
-                            }
-                            $type = implode('&', $typeNames);
-                        } else {
-                            $type = $stmt->type instanceof Node\NullableType
-                                ? '?' . $stmt->type->type->toString()
-                                : $stmt->type->toString();
-                        }
+                        $type = $this->getTypeName($stmt->type);
                     }
 
                     foreach ($stmt->props as $prop) {
@@ -103,5 +87,55 @@ class StructureVisitor extends NodeVisitorAbstract
         }
         $metric->set('properties', $properties);
         $metric->set('constants', $constants);
+    }
+
+    /**
+     * Get type name from a type node
+     *
+     * @param Node $type
+     * @return string
+     */
+    private function getTypeName($type)
+    {
+        // Handle UnionType (e.g., string|int)
+        if ($type instanceof Node\UnionType) {
+            $typeNames = [];
+            foreach ($type->types as $subType) {
+                $typeNames[] = $this->getTypeName($subType);
+            }
+            return implode('|', $typeNames);
+        }
+
+        // Handle IntersectionType (e.g., Foo&Bar)
+        if ($type instanceof Node\IntersectionType) {
+            $typeNames = [];
+            foreach ($type->types as $subType) {
+                $typeNames[] = $this->getTypeName($subType);
+            }
+            return implode('&', $typeNames);
+        }
+
+        // Handle NullableType (e.g., ?string)
+        if ($type instanceof Node\NullableType) {
+            return '?' . $this->getTypeName($type->type);
+        }
+
+        // Try toString() method if available
+        if (method_exists($type, 'toString')) {
+            return $type->toString();
+        }
+
+        // Handle Name nodes (class names, etc.)
+        if ($type instanceof Node\Name) {
+            return $type->toCodeString();
+        }
+
+        // Handle Identifier nodes (built-in types like string, int, etc.)
+        if ($type instanceof Node\Identifier) {
+            return (string) $type;
+        }
+
+        // Last resort - return 'mixed' for unknown types
+        return 'mixed';
     }
 }

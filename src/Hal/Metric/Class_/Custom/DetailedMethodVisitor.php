@@ -23,6 +23,9 @@ class DetailedMethodVisitor extends NodeVisitorAbstract
     private $methodCalls = [];
     private $methodPropertyReads = [];
     private $methodPropertyWrites = [];
+    private $methodInstantiations = [];
+    private $methodClosures = [];
+    private $methodDynamicCalls = [];
 
     public function __construct(Metrics $metrics)
     {
@@ -37,6 +40,9 @@ class DetailedMethodVisitor extends NodeVisitorAbstract
         $this->methodCalls = [];
         $this->methodPropertyReads = [];
         $this->methodPropertyWrites = [];
+        $this->methodInstantiations = [];
+        $this->methodClosures = [];
+        $this->methodDynamicCalls = [];
         return null;
     }
 
@@ -56,23 +62,101 @@ class DetailedMethodVisitor extends NodeVisitorAbstract
             $this->methodCalls = [];
             $this->methodPropertyReads = [];
             $this->methodPropertyWrites = [];
+            $this->methodInstantiations = [];
+            $this->methodClosures = [];
+            $this->methodDynamicCalls = [];
         }
 
         // Collect method calls, property reads/writes while inside a method
         if ($this->currentMethodNode) {
+            // Track instantiations (new keyword)
+            if ($node instanceof Node\Expr\New_) {
+                $className = \getNameOfNode($node->class);
+                if ($className && $className !== 'anonymous@' . spl_object_hash($node->class)) {
+                    $instantiation = [
+                        'class' => $className,
+                        'args' => count($node->args),
+                        'isChained' => $this->isChainedInstantiation($node)
+                    ];
+
+                    // Track constructor argument types for dependency analysis
+                    $dependencies = [];
+                    foreach ($node->args as $arg) {
+                        $argType = $this->inferArgumentType($arg->value);
+                        if ($argType) {
+                            $dependencies[] = $argType;
+                        }
+                    }
+                    if (!empty($dependencies)) {
+                        $instantiation['constructorDeps'] = $dependencies;
+                    }
+
+                    $this->methodInstantiations[] = $instantiation;
+                }
+            }
+
+            // Track closures and arrow functions
+            if ($node instanceof Node\Expr\Closure || $node instanceof Node\Expr\ArrowFunction) {
+                $closure = [
+                    'type' => $node instanceof Node\Expr\ArrowFunction ? 'arrow' : 'closure',
+                    'params' => count($node->params),
+                    'uses' => []
+                ];
+
+                // Capture use variables (closure only, arrow functions capture automatically)
+                if ($node instanceof Node\Expr\Closure && isset($node->uses)) {
+                    foreach ($node->uses as $use) {
+                        if ($use->var instanceof Node\Expr\Variable && is_string($use->var->name)) {
+                            $closure['uses'][] = $use->var->name;
+                        }
+                    }
+                }
+
+                $this->methodClosures[] = $closure;
+            }
+
+            // Track method calls
             if ($node instanceof Node\Expr\MethodCall) {
                 $caller = $this->resolveCallerName($node->var);
                 $methodName = $this->resolveMethodName($node->name);
+
                 if ($methodName !== null) {
                     $this->methodCalls[] = ['caller' => $caller, 'method' => $methodName];
+                } else {
+                    // Dynamic method call
+                    $this->methodDynamicCalls[] = [
+                        'caller' => $caller,
+                        'type' => 'dynamic_method',
+                        'nameType' => get_class($node->name)
+                    ];
                 }
             }
 
             if ($node instanceof Node\Expr\StaticCall) {
                 $caller = \getNameOfNode($node->class);
                 $methodName = $this->resolveMethodName($node->name);
+
                 if ($methodName !== null) {
                     $this->methodCalls[] = ['caller' => $caller, 'method' => $methodName];
+                } else {
+                    // Dynamic static call
+                    $this->methodDynamicCalls[] = [
+                        'caller' => $caller,
+                        'type' => 'dynamic_static',
+                        'nameType' => get_class($node->name)
+                    ];
+                }
+            }
+
+            // Track call_user_func and similar
+            if ($node instanceof Node\Expr\FuncCall) {
+                $funcName = \getNameOfNode($node->name);
+                if (in_array($funcName, ['call_user_func', 'call_user_func_array', 'array_map', 'array_filter'])) {
+                    $this->methodDynamicCalls[] = [
+                        'type' => 'func_call',
+                        'function' => $funcName,
+                        'args' => count($node->args)
+                    ];
                 }
             }
 
@@ -118,6 +202,9 @@ class DetailedMethodVisitor extends NodeVisitorAbstract
                                 $metric->set('calls', $this->methodCalls);
                                 $metric->set('propertyReads', $this->methodPropertyReads);
                                 $metric->set('propertyWrites', $this->methodPropertyWrites);
+                                $metric->set('instantiates', $this->methodInstantiations);
+                                $metric->set('closures', $this->methodClosures);
+                                $metric->set('dynamicCalls', $this->methodDynamicCalls);
                                 $metric->set('body', $methodBody);
                                 break;
                             }
@@ -130,6 +217,9 @@ class DetailedMethodVisitor extends NodeVisitorAbstract
             $this->methodCalls = [];
             $this->methodPropertyReads = [];
             $this->methodPropertyWrites = [];
+            $this->methodInstantiations = [];
+            $this->methodClosures = [];
+            $this->methodDynamicCalls = [];
         }
 
         // Pop class context when leaving a class
@@ -188,5 +278,57 @@ class DetailedMethodVisitor extends NodeVisitorAbstract
 
         // Пытаемся привести к строке
         return (string) $nameNode;
+    }
+
+    /**
+     * Check if instantiation is part of a fluent chain (e.g., (new Foo())->bar())
+     */
+    private function isChainedInstantiation(Node\Expr\New_ $node): bool
+    {
+        // We need to check parent context, but php-parser doesn't provide parent info directly
+        // For now, return false - we'll detect fluent chains in PatternAnalysisVisitor
+        return false;
+    }
+
+    /**
+     * Infer the type of an argument passed to constructor
+     */
+    private function inferArgumentType(Node $argNode): ?string
+    {
+        // Variable
+        if ($argNode instanceof Node\Expr\Variable) {
+            return null; // Can't infer type from variable name alone
+        }
+
+        // New expression
+        if ($argNode instanceof Node\Expr\New_) {
+            return \getNameOfNode($argNode->class);
+        }
+
+        // Class constant (e.g., SomeClass::class)
+        if ($argNode instanceof Node\Expr\ClassConstFetch) {
+            if ($argNode->name instanceof Node\Identifier && (string)$argNode->name === 'class') {
+                return \getNameOfNode($argNode->class);
+            }
+        }
+
+        // Static method call that might be a factory
+        if ($argNode instanceof Node\Expr\StaticCall) {
+            return \getNameOfNode($argNode->class);
+        }
+
+        // Method call (dependency from another object)
+        if ($argNode instanceof Node\Expr\MethodCall) {
+            // Can't reliably infer without type information
+            return null;
+        }
+
+        // Property fetch
+        if ($argNode instanceof Node\Expr\PropertyFetch) {
+            // Can't infer type without context
+            return null;
+        }
+
+        return null;
     }
 }

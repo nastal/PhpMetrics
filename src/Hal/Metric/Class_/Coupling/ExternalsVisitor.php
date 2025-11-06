@@ -139,6 +139,9 @@ class ExternalsVisitor extends NodeVisitorAbstract
 
     private function pushToDependencies(array &$dependencies, $dependency)
     {
+        if ($dependency === null) {
+            return;
+        }
         $lowercase = strtolower($dependency);
         if ('self' === $lowercase || 'parent' === $lowercase) {
             return;
