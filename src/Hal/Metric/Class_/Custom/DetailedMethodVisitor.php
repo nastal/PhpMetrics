@@ -26,6 +26,8 @@ class DetailedMethodVisitor extends NodeVisitorAbstract
     private $methodInstantiations = [];
     private $methodClosures = [];
     private $methodDynamicCalls = [];
+    private $methodEvents = [];
+    private $methodQueueCalls = [];
 
     public function __construct(Metrics $metrics)
     {
@@ -43,6 +45,8 @@ class DetailedMethodVisitor extends NodeVisitorAbstract
         $this->methodInstantiations = [];
         $this->methodClosures = [];
         $this->methodDynamicCalls = [];
+        $this->methodEvents = [];
+        $this->methodQueueCalls = [];
         return null;
     }
 
@@ -65,6 +69,8 @@ class DetailedMethodVisitor extends NodeVisitorAbstract
             $this->methodInstantiations = [];
             $this->methodClosures = [];
             $this->methodDynamicCalls = [];
+            $this->methodEvents = [];
+            $this->methodQueueCalls = [];
         }
 
         // Collect method calls, property reads/writes while inside a method
@@ -138,6 +144,26 @@ class DetailedMethodVisitor extends NodeVisitorAbstract
 
                 if ($methodName !== null) {
                     $this->methodCalls[] = ['caller' => $caller, 'method' => $methodName];
+
+                    // Detect event dispatching
+                    if ($this->isEventDispatch($caller, $methodName)) {
+                        $eventData = ['dispatcher' => $caller, 'method' => $methodName, 'line' => $node->getLine()];
+                        if (!empty($node->args[0]) && $node->args[0]->value instanceof Node\Expr\New_) {
+                            $eventClass = \getNameOfNode($node->args[0]->value->class);
+                            if ($eventClass) $eventData['event'] = $eventClass;
+                        }
+                        $this->methodEvents[] = $eventData;
+                    }
+
+                    // Detect queue calls
+                    if ($this->isQueueCall($caller, $methodName)) {
+                        $queueData = ['class' => $caller, 'method' => $methodName, 'args' => count($node->args), 'line' => $node->getLine()];
+                        if (!empty($node->args[0]) && $node->args[0]->value instanceof Node\Expr\New_) {
+                            $jobClass = \getNameOfNode($node->args[0]->value->class);
+                            if ($jobClass) $queueData['job'] = $jobClass;
+                        }
+                        $this->methodQueueCalls[] = $queueData;
+                    }
                 } else {
                     // Dynamic static call
                     $this->methodDynamicCalls[] = [
@@ -205,6 +231,8 @@ class DetailedMethodVisitor extends NodeVisitorAbstract
                                 $metric->set('instantiates', $this->methodInstantiations);
                                 $metric->set('closures', $this->methodClosures);
                                 $metric->set('dynamicCalls', $this->methodDynamicCalls);
+                                $metric->set('events', $this->methodEvents);
+                                $metric->set('queueCalls', $this->methodQueueCalls);
                                 $metric->set('body', $methodBody);
                                 break;
                             }
@@ -220,6 +248,8 @@ class DetailedMethodVisitor extends NodeVisitorAbstract
             $this->methodInstantiations = [];
             $this->methodClosures = [];
             $this->methodDynamicCalls = [];
+            $this->methodEvents = [];
+            $this->methodQueueCalls = [];
         }
 
         // Pop class context when leaving a class
@@ -330,5 +360,24 @@ class DetailedMethodVisitor extends NodeVisitorAbstract
         }
 
         return null;
+    }
+
+    private function isEventDispatch(?string $className, ?string $methodName): bool
+    {
+        if (!$className || !$methodName) return false;
+        $patterns = ['Event' => ['dispatch','fire'], 'Dispatcher' => ['dispatch','fire']];
+        foreach ($patterns as $class => $methods) {
+            if (stripos($className, $class) !== false && in_array($methodName, $methods)) return true;
+        }
+        return false;
+    }
+
+    private function isQueueCall(?string $className, ?string $methodName): bool
+    {
+        if (!$className || !$methodName) return false;
+        if ($methodName === 'queue') return true;
+        if (stripos($className, 'Queue') !== false && in_array($methodName, ['push','later','dispatch'])) return true;
+        if (stripos($className, 'QueueServ') !== false) return true;
+        return false;
     }
 }
